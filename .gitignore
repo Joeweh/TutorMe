@@ -1,0 +1,11 @@
+# JetBrains
+.idea/
+*.iml
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Backend
+backend/*.env

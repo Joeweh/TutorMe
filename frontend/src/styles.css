@@ -1,0 +1,15 @@
+.video-flipped {
+    transform: scaleX(-1);
+}
+
+.chat-message.local {
+    align-self: flex-end;
+    background: #0066cc;
+    color: white;
+}
+
+.chat-message.remote {
+    align-self: flex-start;
+    background: #3a3a3a;
+    color: #fff;
+}

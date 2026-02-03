@@ -1,21 +1,28 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
+	"time"
+	"tutor_me_backend/env"
 
 	"github.com/gorilla/websocket"
-	"github.com/joho/godotenv"
 )
 
-type Message struct {
-	Type string          `json:"type"`
-	Data json.RawMessage `json:"data"`
-	Room string          `json:"room"`
-}
+const (
+	sendBufferSize = 256
+	maxMessageSize = 16 * 1024
+	pongWait       = 60 * time.Second
+	pingPeriod     = 54 * time.Second
+	writeWait      = 10 * time.Second
+)
 
 type Client struct {
 	conn *websocket.Conn
@@ -28,25 +35,46 @@ type Room struct {
 	mu      sync.RWMutex
 }
 
-type IceServer struct {
-	Urls       string `json:"urls"`
-	Username   string `json:"username,omitempty"`
-	Credential string `json:"credential,omitempty"`
-}
-
-type IceServersResponse struct {
-	IceServers []IceServer `json:"iceServers"`
-}
-
 var (
-	rooms    = make(map[string]*Room)
-	roomsMu  sync.RWMutex
-	upgrader = websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool {
-			return true // Allow all origins in development
-		},
-	}
+	rooms   = make(map[string]*Room)
+	roomsMu sync.RWMutex
 )
+
+func main() {
+	config := env.Load()
+
+	http.HandleFunc("/ws", handleWebSocket)
+	http.HandleFunc("/ice-servers", enableCORS(handleIceServers))
+
+	server := &http.Server{
+		Addr: ":" + config.ServerPort(),
+	}
+
+	// Start server in goroutine
+	go func() {
+		log.Printf("Signaling server starting on %s", config.ServerPort())
+		if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("ListenAndServe error: %v", err)
+		}
+	}()
+
+	// Wait for interrupt signal
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("Shutting down server...")
+
+	// Give connections 5 seconds to finish
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(ctx); err != nil {
+		log.Fatalf("Server shutdown error: %v", err)
+	}
+
+	log.Println("Server stopped")
+}
 
 func getOrCreateRoom(roomID string) *Room {
 	roomsMu.Lock()
@@ -67,13 +95,35 @@ func (c *Client) readPump(room *Room) {
 	defer func() {
 		room.mu.Lock()
 		delete(room.clients, c)
+		isEmpty := len(room.clients) == 0
 		room.mu.Unlock()
-		c.conn.Close()
+
+		if isEmpty {
+			roomsMu.Lock()
+			delete(rooms, c.room)
+			roomsMu.Unlock()
+		}
+
+		_ = c.conn.Close()
 	}()
+
+	c.conn.SetReadLimit(maxMessageSize)
+
+	_ = c.conn.SetReadDeadline(time.Now().Add(pongWait))
+	c.conn.SetPongHandler(func(string) error {
+		log.Printf("Received pong from client in room %s", c.room)
+		_ = c.conn.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
 
 	for {
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
+			if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("Client disconnected from room %s: %v", c.room, err)
+			} else {
+				log.Printf("Read error (possibly missed pong) in room %s: %v", c.room, err)
+			}
 			break
 		}
 
@@ -83,8 +133,10 @@ func (c *Client) readPump(room *Room) {
 			continue
 		}
 
+		log.Printf("Message type=%s room=%s data=%s", msg.Type, msg.Room, msg.Data)
+
 		// Broadcast to all other clients in the room
-		room.mu.RLock()
+		room.mu.Lock()
 		for client := range room.clients {
 			if client != c {
 				select {
@@ -95,119 +147,37 @@ func (c *Client) readPump(room *Room) {
 				}
 			}
 		}
-		room.mu.RUnlock()
+		room.mu.Unlock()
 	}
 }
 
 func (c *Client) writePump() {
-	defer c.conn.Close()
+	ticker := time.NewTicker(pingPeriod)
 
-	for message := range c.send {
-		if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
-			break
+	defer func() {
+		ticker.Stop()
+		_ = c.conn.Close()
+	}()
+
+	for {
+		select {
+		case message, ok := <-c.send:
+			_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if !ok {
+				_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				return
+			}
+
+		case <-ticker.C:
+			log.Printf("Sending ping to client in room %s", c.room)
+			_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				log.Printf("Ping failed for client in room %s: %v", c.room, err)
+				return
+			}
 		}
-	}
-}
-
-func handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	roomID := r.URL.Query().Get("room")
-	if roomID == "" {
-		roomID = "default"
-	}
-
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Printf("Error upgrading connection: %v", err)
-		return
-	}
-
-	client := &Client{
-		conn: conn,
-		room: roomID,
-		send: make(chan []byte, 256),
-	}
-
-	room := getOrCreateRoom(roomID)
-
-	room.mu.Lock()
-	room.clients[client] = true
-	room.mu.Unlock()
-
-	log.Printf("Client joined room: %s (total clients: %d)", roomID, len(room.clients))
-
-	go client.writePump()
-	client.readPump(room)
-}
-
-func handleIceServers(w http.ResponseWriter, r *http.Request) {
-	username := os.Getenv("TURN_USERNAME")
-	credential := os.Getenv("TURN_CREDENTIAL")
-
-	iceServers := IceServersResponse{
-		IceServers: []IceServer{
-			{Urls: "stun:stun.l.google.com:19302"},
-			{Urls: "stun:stun1.l.google.com:19302"},
-
-			{
-				Urls:       "turn:standard.relay.metered.ca:80",
-				Username:   username,
-				Credential: credential,
-			},
-			{
-				Urls:       "turn:standard.relay.metered.ca:80?transport=tcp",
-				Username:   username,
-				Credential: credential,
-			},
-			{
-				Urls:       "turn:standard.relay.metered.ca:443",
-				Username:   username,
-				Credential: credential,
-			},
-			{
-				Urls:       "turns:standard.relay.metered.ca:443?transport=tcp",
-				Username:   username,
-				Credential: credential,
-			},
-		},
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-
-	err := json.NewEncoder(w).Encode(iceServers)
-
-	if err != nil {
-		return
-	}
-}
-
-func enableCORS(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*") // Or specify your frontend URL
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
-		// Handle preflight OPTIONS request
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		next(w, r)
-	}
-}
-
-func main() {
-	err := godotenv.Load()
-
-	if err != nil {
-		log.Fatal("Error loading .env file")
-	}
-
-	http.HandleFunc("/ws", handleWebSocket)
-	http.HandleFunc("/ice-servers", enableCORS(handleIceServers))
-
-	log.Println("Signaling server starting on :8080")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
-		log.Fatal("ListenAndServe error: ", err)
 	}
 }

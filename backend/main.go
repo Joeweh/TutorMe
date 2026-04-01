@@ -17,11 +17,13 @@ const shutdownTimeout = 5 * time.Second
 func main() {
 	config := env.Load()
 
-	http.HandleFunc("/ws", handleWebSocket)
-	http.HandleFunc("/ice-servers", enableCORS(handleIceServers(config)))
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", handleWebSocket)
+	mux.HandleFunc("/ice-servers", handleIceServers(config))
 
 	server := &http.Server{
-		Addr: ":" + config.ServerPort(),
+		Addr:    ":" + config.ServerPort(),
+		Handler: enableCORS(mux),
 	}
 
 	// Start server in goroutine

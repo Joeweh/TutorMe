@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"tutor_me_backend/env"
 
 	"github.com/gorilla/websocket"
+
+	"tutor_me_backend/env"
 )
 
 var (
@@ -63,51 +64,49 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	client.readPump(room)
 }
 
-func handleIceServers(w http.ResponseWriter, _ *http.Request) {
-	config := env.Load()
+func handleIceServers(config *env.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		iceServers := IceServersResponse{
+			IceServers: []IceServer{
+				//{Urls: fmt.Sprintf("stun:%s:3478", config.IceIP())},
+				//
+				//{
+				//	Urls:       fmt.Sprintf("turn:%s:3478", config.IceIP()),
+				//	Username:   config.TurnUsername(),
+				//	Credential: config.TurnPassword(),
+				//},
 
-	iceServers := IceServersResponse{
-		IceServers: []IceServer{
-			//{Urls: fmt.Sprintf("stun:%s:3478", config.IceIP())},
-			//
-			//{
-			//	Urls:       fmt.Sprintf("turn:%s:3478", config.IceIP()),
-			//	Username:   config.TurnUsername(),
-			//	Credential: config.TurnPassword(),
-			//},
+				{
+					Urls: "stun:stun.relay.metered.ca:80",
+				},
+				{
+					Urls:       "turn:standard.relay.metered.ca:80",
+					Username:   config.TurnUsername(),
+					Credential: config.TurnCredential(),
+				},
+				{
+					Urls:       "turn:standard.relay.metered.ca:80?transport=tcp",
+					Username:   config.TurnUsername(),
+					Credential: config.TurnCredential(),
+				},
+				{
+					Urls:       "turn:standard.relay.metered.ca:443",
+					Username:   config.TurnUsername(),
+					Credential: config.TurnCredential(),
+				},
+				{
+					Urls:       "turns:standard.relay.metered.ca:443?transport=tcp",
+					Username:   config.TurnUsername(),
+					Credential: config.TurnCredential(),
+				},
+			},
+		}
 
-			{
-				Urls: "stun:stun.relay.metered.ca:80",
-			},
-			{
-				Urls:       "turn:standard.relay.metered.ca:80",
-				Username:   config.TurnUsername(),
-				Credential: config.TurnCredential(),
-			},
-			{
-				Urls:       "turn:standard.relay.metered.ca:80?transport=tcp",
-				Username:   config.TurnUsername(),
-				Credential: config.TurnCredential(),
-			},
-			{
-				Urls:       "turn:standard.relay.metered.ca:443",
-				Username:   config.TurnUsername(),
-				Credential: config.TurnCredential(),
-			},
-			{
-				Urls:       "turns:standard.relay.metered.ca:443?transport=tcp",
-				Username:   config.TurnUsername(),
-				Credential: config.TurnCredential(),
-			},
-		},
-	}
+		w.Header().Set("Content-Type", "application/json")
 
-	w.Header().Set("Content-Type", "application/json")
-
-	err := json.NewEncoder(w).Encode(iceServers)
-
-	if err != nil {
-		return
+		if err := json.NewEncoder(w).Encode(iceServers); err != nil {
+			return
+		}
 	}
 }
 

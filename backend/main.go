@@ -44,7 +44,7 @@ func main() {
 	config := env.Load()
 
 	http.HandleFunc("/ws", handleWebSocket)
-	http.HandleFunc("/ice-servers", enableCORS(handleIceServers))
+	http.HandleFunc("/ice-servers", enableCORS(handleIceServers(config)))
 
 	server := &http.Server{
 		Addr: ":" + config.ServerPort(),

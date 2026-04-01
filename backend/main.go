@@ -16,6 +16,7 @@ const shutdownTimeout = 5 * time.Second
 
 func main() {
 	config := env.Load()
+	InitDB()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", handleWebSocket)

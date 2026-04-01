@@ -19,8 +19,9 @@ func main() {
 	InitDB()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", handleWebSocket)
-	mux.HandleFunc("/ice-servers", handleIceServers(config))
+	mux.HandleFunc("GET /ws", handleWebSocket)
+	mux.HandleFunc("GET /ice-servers", handleIceServers(config))
+	mux.HandleFunc("POST /login", login(config))
 
 	server := &http.Server{
 		Addr:    ":" + config.ServerPort(),

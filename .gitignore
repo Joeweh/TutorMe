@@ -2,6 +2,9 @@
 .idea/
 *.iml
 
+# Zed
+.zed/
+
 # Frontend
 frontend/node_modules/
 frontend/dist/

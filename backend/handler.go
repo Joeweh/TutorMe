@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -77,25 +78,25 @@ func handleIceServers(config *env.Config) http.HandlerFunc {
 				//},
 
 				{
-					Urls: "stun:stun.relay.metered.ca:80",
+					Urls: fmt.Sprintf("stun:%s:80", config.IceIP()),
 				},
 				{
-					Urls:       "turn:standard.relay.metered.ca:80",
+					Urls:       fmt.Sprintf("turn:%s:80", config.IceIP()),
 					Username:   config.TurnUsername(),
 					Credential: config.TurnCredential(),
 				},
 				{
-					Urls:       "turn:standard.relay.metered.ca:80?transport=tcp",
+					Urls:       fmt.Sprintf("turn:%s:80?transport=tcp", config.IceIP()),
 					Username:   config.TurnUsername(),
 					Credential: config.TurnCredential(),
 				},
 				{
-					Urls:       "turn:standard.relay.metered.ca:443",
+					Urls:       fmt.Sprintf("turn:%s:443", config.IceIP()),
 					Username:   config.TurnUsername(),
 					Credential: config.TurnCredential(),
 				},
 				{
-					Urls:       "turns:standard.relay.metered.ca:443?transport=tcp",
+					Urls:       fmt.Sprintf("turn:%s:443?transport=tcp", config.IceIP()),
 					Username:   config.TurnUsername(),
 					Credential: config.TurnCredential(),
 				},

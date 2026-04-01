@@ -15,12 +15,16 @@ type Config struct {
 	iceIP          string
 	turnUsername   string
 	turnCredential string
+
+	// Auth
+	jwtSecret string
 }
 
 func (c *Config) ServerPort() string     { return c.serverPort }
 func (c *Config) IceIP() string          { return c.iceIP }
 func (c *Config) TurnUsername() string   { return c.turnUsername }
 func (c *Config) TurnCredential() string { return c.turnCredential }
+func (c *Config) JWTSecret() string      { return c.jwtSecret }
 
 var (
 	instance *Config
@@ -38,6 +42,7 @@ func Load() *Config {
 			iceIP:          getEnv("ICE_IP"),
 			turnUsername:   getEnv("TURN_USERNAME"),
 			turnCredential: getEnv("TURN_CREDENTIAL"),
+			jwtSecret:      getEnv("JWT_SECRET"),
 		}
 	})
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -62,7 +63,6 @@ func AuthMiddleware(config *env.Config) func(http.Handler) http.Handler {
 
 type loginRequest struct {
 	Email    string `json:"email"`
-	Password string `json:"password"`
 }
 
 func login(config *env.Config) http.HandlerFunc {
@@ -76,15 +76,19 @@ func login(config *env.Config) http.HandlerFunc {
 		// TODO verify credentials with bcrypt
 		var userID string
 		err := DB.QueryRow("SELECT user_id FROM users WHERE email = ?", req.Email).Scan(&userID)
+		if err == sql.ErrNoRows {
+			http.Error(w, "invalid credentials", http.StatusUnauthorized)
+			return
+		}
 		if err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
-		
+
 		log.Printf("ID: %s", userID)
-		
+
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-			// TODO userID 
+			// TODO userID
     		"sub": userID,
     		"exp": time.Now().Add(24 * time.Hour).Unix(),
 		})

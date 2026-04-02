@@ -22,6 +22,8 @@ func main() {
 	mux.HandleFunc("GET /ws", handleWebSocket)
 	mux.HandleFunc("GET /ice-servers", handleIceServers(config))
 	mux.HandleFunc("POST /login", login(config))
+	mux.HandleFunc("POST /refresh", refresh(config))
+	mux.HandleFunc("POST /logout", logout())
 
 	server := &http.Server{
 		Addr:    ":" + config.ServerPort(),

@@ -16,14 +16,20 @@ const shutdownTimeout = 5 * time.Second
 
 func main() {
 	config := env.Load()
-	InitDB()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /ws", handleWebSocket)
-	mux.HandleFunc("GET /ice-servers", handleIceServers(config))
-	mux.HandleFunc("POST /login", login(config))
-	mux.HandleFunc("POST /refresh", refresh(config))
-	mux.HandleFunc("POST /logout", logout())
+
+	mux.Handle("GET /ws", http.HandlerFunc(handleWebSocket))
+	mux.Handle("GET /ice-servers", handleIceServers(config))
+
+	// AUTH
+	//auth := AuthMiddleware(config)
+	//mux.HandleFunc("POST /login", login(config))
+	//mux.HandleFunc("POST /register", register(config))
+	//mux.HandleFunc("POST /refresh", refresh(config))
+	//mux.HandleFunc("POST /logout", logout())
+	//mux.Handle("GET /ws", auth(http.HandlerFunc(handleWebSocket)))
+	//mux.Handle("GET /ice-servers", auth(handleIceServers(config)))
 
 	server := &http.Server{
 		Addr:    ":" + config.ServerPort(),

@@ -7,12 +7,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
+	"net/mail"
 	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
 
 	"tutor_me_backend/env"
 )
@@ -68,7 +69,8 @@ func AuthMiddleware(config *env.Config) func(http.Handler) http.Handler {
 }
 
 type loginRequest struct {
-	Email string `json:"email"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 func newAccessToken(userID string, secret string) (string, error) {
@@ -95,9 +97,8 @@ func login(config *env.Config) http.HandlerFunc {
 			return
 		}
 
-		// TODO verify credentials with bcrypt
-		var userID string
-		err := DB.QueryRow("SELECT user_id FROM users WHERE email = ?", req.Email).Scan(&userID)
+		var userID, hashedPassword string
+		err := DB.QueryRow("SELECT user_id, password FROM users WHERE email = ?", req.Email).Scan(&userID, &hashedPassword)
 		if err == sql.ErrNoRows {
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
 			return
@@ -107,7 +108,10 @@ func login(config *env.Config) http.HandlerFunc {
 			return
 		}
 
-		log.Printf("ID: %s", userID)
+		if err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(req.Password)); err != nil {
+			http.Error(w, "invalid credentials", http.StatusUnauthorized)
+			return
+		}
 
 		accessToken, err := newAccessToken(userID, config.JWTSecret())
 		if err != nil {
@@ -198,5 +202,80 @@ func logout() http.HandlerFunc {
 		}
 
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+type registerRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+func register(config *env.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req registerRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if _, err := mail.ParseAddress(req.Email); err != nil {
+			http.Error(w, "invalid email", http.StatusBadRequest)
+			return
+		}
+
+		if len(req.Password) < 8 {
+			http.Error(w, "password must be at least 8 characters", http.StatusBadRequest)
+			return
+		}
+
+		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+		if err != nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		b := make([]byte, 16)
+		if _, err := rand.Read(b); err != nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		userID := hex.EncodeToString(b)
+
+		_, err = DB.Exec(
+			"INSERT INTO users (user_id, email, password) VALUES (?, ?, ?)",
+			userID, req.Email, string(hashedPassword),
+		)
+		if err != nil {
+			http.Error(w, "email already in use", http.StatusConflict)
+			return
+		}
+
+		accessToken, err := newAccessToken(userID, config.JWTSecret())
+		if err != nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		refreshToken, err := newRefreshToken()
+		if err != nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		_, err = DB.Exec(
+			"INSERT INTO refresh_tokens (token, user_id, expires_at) VALUES (?, ?, ?)",
+			refreshToken, userID, time.Now().Add(refreshTokenExp),
+		)
+		if err != nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]string{
+			"access_token":  accessToken,
+			"refresh_token": refreshToken,
+		})
 	}
 }

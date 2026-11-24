@@ -5,6 +5,7 @@ export interface SignalingMessage {
 }
 
 export interface ChatMessage {
+    id: string
     text: string
     sender: 'local' | 'remote'
     timestamp: Date

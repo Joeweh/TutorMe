@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import {SignalingMessage, ChatMessage, ConnectionStatus} from './types'
 import {BACKEND_HOST, ICE_SERVERS} from './config'
 import "./styles.css"
 
 function App() {
     const [muted, setMuted] = useState(false)
-    const [video, setVideo] = useState(false)
+    const [cameraOff, setCameraOff] = useState(false)
     const [isScreenSharing, setIsScreenSharing] = useState(false)
     const [room, setRoom] = useState('room1')
     const [status, setStatus] = useState<ConnectionStatus>('disconnected')
@@ -40,19 +40,13 @@ function App() {
             setDevices(deviceList)
             console.log('📱 Available devices:', deviceList)
 
-            // Set defaults if not already set
-            if (!selectedAudioInput) {
-                const defaultAudio = deviceList.find(d => d.kind === 'audioinput')
-                if (defaultAudio) setSelectedAudioInput(defaultAudio.deviceId)
-            }
-            if (!selectedVideoInput) {
-                const defaultVideo = deviceList.find(d => d.kind === 'videoinput')
-                if (defaultVideo) setSelectedVideoInput(defaultVideo.deviceId)
-            }
-            if (!selectedAudioOutput) {
-                const defaultOutput = deviceList.find(d => d.kind === 'audiooutput')
-                if (defaultOutput) setSelectedAudioOutput(defaultOutput.deviceId)
-            }
+            // Set defaults if not already set. Functional updates so this works
+            // when called from a stale closure (e.g. the devicechange listener).
+            const firstOf = (kind: MediaDeviceKind) =>
+                deviceList.find(d => d.kind === kind)?.deviceId ?? ''
+            setSelectedAudioInput(prev => prev || firstOf('audioinput'))
+            setSelectedVideoInput(prev => prev || firstOf('videoinput'))
+            setSelectedAudioOutput(prev => prev || firstOf('audiooutput'))
         } catch (error) {
             console.error('❌ Error getting devices:', error)
         }
@@ -162,6 +156,7 @@ function App() {
         channel.onmessage = (event) => {
             console.log('📨 Received message:', event.data)
             const newMessage: ChatMessage = {
+                id: crypto.randomUUID(),
                 text: event.data,
                 sender: 'remote',
                 timestamp: new Date(),
@@ -195,6 +190,7 @@ function App() {
 
         // Add to local messages
         const newMessage: ChatMessage = {
+            id: crypto.randomUUID(),
             text: messageInput,
             sender: 'local',
             timestamp: new Date(),
@@ -203,7 +199,7 @@ function App() {
         setMessageInput('')
     }
 
-    const handleKeyPress = (e: React.KeyboardEvent) => {
+    const handleKeyDown = (e: KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault()
             sendMessage()
@@ -337,7 +333,7 @@ function App() {
         ws.onopen = () => {
             console.log('✅ Connected to signaling server')
             updateStatus(`Connected to room: ${room}`, 'connecting')
-            createPeerConnection()
+            void createPeerConnection()
         }
 
         ws.onmessage = async (event) => {
@@ -375,6 +371,9 @@ function App() {
 
             const stream = await navigator.mediaDevices.getUserMedia(constraints)
 
+            // Device labels are only exposed after permission is granted, so refresh now
+            void getDevices()
+
             localStreamRef.current = stream
             if (localVideoRef.current) {
                 localVideoRef.current.srcObject = stream
@@ -397,6 +396,9 @@ function App() {
     }
 
     const leaveRoom = () => {
+        // Nothing to clean up (e.g. StrictMode's dev-only unmount before joining)
+        if (!pcRef.current && !wsRef.current && !localStreamRef.current) return
+
         // Close peer connection
         if (pcRef.current) {
             pcRef.current.close()
@@ -449,7 +451,7 @@ function App() {
         const videoTrack = localStreamRef.current?.getVideoTracks()[0];
         if (videoTrack) {
             videoTrack.enabled = !videoTrack.enabled;
-            setVideo(!videoTrack.enabled);
+            setCameraOff(!videoTrack.enabled);
         }
     };
 
@@ -495,7 +497,7 @@ function App() {
             // Handle when user clicks "Stop Sharing" in browser UI
             screenStream.getVideoTracks()[0].onended = () => {
                 console.log('🛑 Screen share ended by user')
-                stopScreenShare()
+                void stopScreenShare()
             }
         } catch (error) {
             console.error('❌ Error starting screen share:', error)
@@ -507,10 +509,12 @@ function App() {
         try {
             console.log('🎥 Switching back to camera')
 
-            // Get camera stream again
+            // Get camera stream again (video only: the existing audio track is still live)
             const cameraStream = await navigator.mediaDevices.getUserMedia({
-                video: true,
-                audio: true,
+                video: selectedVideoInput
+                    ? { deviceId: { exact: selectedVideoInput } }
+                    : true,
+                audio: false,
             })
 
             // Replace screen track with camera in peer connection
@@ -537,7 +541,7 @@ function App() {
 
             // Update local video display
             if (localVideoRef.current) {
-                localVideoRef.current.srcObject = cameraStream
+                localVideoRef.current.srcObject = localStreamRef.current
             }
 
             setIsScreenSharing(false)
@@ -547,6 +551,15 @@ function App() {
         }
     }
 
+
+    // Load device list on mount and keep it current when devices are plugged/unplugged
+    useEffect(() => {
+        void getDevices()
+        navigator.mediaDevices.addEventListener('devicechange', getDevices)
+        return () => {
+            navigator.mediaDevices.removeEventListener('devicechange', getDevices)
+        }
+    }, [])
 
     // Cleanup on unmount
     useEffect(() => {
@@ -705,7 +718,7 @@ function App() {
                     {muted ? 'Unmute Mic' : 'Mute Mic'}
                 </button>
                 <button onClick={toggleCamera} disabled={!isInRoom}>
-                    {video ? 'Show Camera' : 'Hide Camera'}
+                    {cameraOff ? 'Show Camera' : 'Hide Camera'}
                 </button>
                 <button
                     onClick={isScreenSharing ? stopScreenShare : startScreenShare}
@@ -732,9 +745,9 @@ function App() {
                         {messages.length === 0 ? (
                             <div className="chat-empty">No messages yet. Start chatting!</div>
                         ) : (
-                            messages.map((msg, index) => (
+                            messages.map((msg) => (
                                 <div
-                                    key={index}
+                                    key={msg.id}
                                     className={`chat-message ${msg.sender === 'local' ? 'local' : 'remote'}`}
                                 >
                                     <div className="message-text">{msg.text}</div>
@@ -755,7 +768,7 @@ function App() {
                             className="chat-input"
                             value={messageInput}
                             onChange={(e) => setMessageInput(e.target.value)}
-                            onKeyPress={handleKeyPress}
+                            onKeyDown={handleKeyDown}
                             placeholder="Type a message... (Enter to send)"
                         />
                         <button onClick={sendMessage} disabled={!messageInput.trim()}>

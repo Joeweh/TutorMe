@@ -5,7 +5,7 @@ export default defineConfig({
     plugins: [react()],
     server: {
         allowedHosts: [
-          'barriers-website-minute-ontario.trycloudflare.com'
+          '.trycloudflare.com'
         ],
         port: 3000,
     },
